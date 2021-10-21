@@ -1,0 +1,282 @@
+---
+title: "Portfolio Construction and Analytics Tool"
+runtime: shiny
+output:
+  flexdashboard::flex_dashboard:
+    orientation: rows
+---
+
+```{r setup, message = FALSE}
+library(tidyverse)
+library(shiny)
+library(highcharter)
+library(tidyquant)
+library(timetk)
+library(scales)
+library(broom)
+library(highcharter)
+library(plotly)
+```
+
+Sidebar {.sidebar data-width=230}
+=====================================
+  
+```{r}
+
+fluidRow(
+  column(6, # column width
+         
+  # variable stock 1, show "Stock 1", and choose by default "AAPL"
+  textInput("stock1", "Stock 1", "AAPL")),
+  column(6,
+  
+  # weight of stock 1, show "Weight %", 25% by default, anc check weight is 0-100
+  numericInput("w1", "Weight %", 10, min = 0, max = 100))
+)  
+
+fluidRow(
+  column(6,
+  textInput("stock2", "Stock 2", "BA")),
+  column(6,
+  numericInput("w2", "Weight %", 10, min = 0, max = 100))
+)
+
+fluidRow(
+  column(6,
+  textInput("stock3", "Stock 3", "DIS")),
+  column(6,
+  numericInput("w3", "Weight %", 10, min = 0, max = 100))
+)
+
+fluidRow(
+  column(6,
+  textInput("stock4", "Stock 4", "GS")),
+  column(6,
+  numericInput("w4", "Weight %", 10, min = 0, max = 100))
+)
+
+fluidRow(
+  column(6,
+  textInput("stock5", "Stock 5", "MRK")),
+  column(6,
+  numericInput("w5", "Weight %", 10, min = 0, max = 100))
+  
+)
+
+fluidRow(
+  column(6,
+  textInput("stock6", "Stock 6", "GE")),
+  column(6,
+  numericInput("w6", "Weight %", 10, min = 0, max = 100))
+)
+
+fluidRow(
+  column(6,
+  textInput("stock7", "Stock 7", "TSLA")),
+  column(6,
+  numericInput("w7", "Weight %", 10, min = 0, max = 100))
+)
+
+fluidRow(
+  column(6,
+  textInput("stock8", "Stock 8", "MC")),
+  column(6,
+  numericInput("w8", "Weight %", 10, min = 0, max = 100))
+)
+
+fluidRow(
+  column(6,
+  textInput("stock9", "Stock 9", "AMZN")),
+  column(6,
+  numericInput("w9", "Weight %", 10, min = 0, max = 100))
+)
+
+fluidRow(
+  column(6,
+  textInput("stock10", "Stock 10", "GME")),
+  column(6,
+  numericInput("w10", "Weight %", 10, min = 0, max = 100))
+)
+
+
+fluidRow(
+  column(7,
+  dateInput("date", "Starting Date", "2007-01-01", format = "yyyy-mm-dd"))
+)
+
+
+actionButton("go", "Submit")
+```
+
+
+```{r}
+myportfolio_data <- eventReactive(input$go, {
+
+# Get symbols from user  
+symbols <- c(input$stock1, input$stock2, input$stock3, input$stock4, input$stock5, input$stock6, input$stock7, input$stock8, input$stock9, input$stock10)
+
+# Get weights from user and make sure they add up to 100
+weights <- c(input$w1/100, input$w2/100, input$w3/100, input$w4/100, input$w5/100, input$w6/100, input$w7/100, input$w8/100, input$w9/100, input$w10/100 )
+validate(need(input$w1 + input$w2+ input$w3 + input$w4 + input$w5 + input$w6 + input$w7 + input$w8 + input$w9 + input$w10 == 100,
+            "Portfolio weights must sum to 100%!"))
+
+
+myStocks <- symbols %>% 
+  tq_get(get  = "stock.prices",
+         from = input$date,
+         to   = Sys.Date()) %>%
+  group_by(symbol) 
+
+# get prices for SPY, the SP500 ETF
+spy <- tq_get("SPY", get  = "stock.prices",
+              from = input$date,
+              to   =  Sys.Date()) 
+
+#calculate monthly  returns for the chosen stocks
+myStocks_returns_monthly <- myStocks %>% 
+  tq_transmute(select     = adjusted, 
+               mutate_fun = periodReturn, 
+               period     = "monthly", 
+               type       = "arithmetic",
+               col_rename = "monthly_return",
+               cols = c(nested.col)) 
+
+
+#calculate SPY monthly  returns
+spy_returns_monthly <- spy %>%
+  tq_transmute(select     = adjusted, 
+               mutate_fun = periodReturn, 
+               period     = "monthly", 
+               type       = "arithmetic",
+               col_rename = "SPY_return",
+               cols = c(nested.col))
+
+#calculate portfolio monthly  returns - weights * returns
+portfolio_returns_tq_rebalanced_monthly <-  tq_portfolio(data = myStocks_returns_monthly,
+             assets_col = symbol,
+             returns_col = monthly_return,
+             weights = weights,
+             col_rename = "monthly_return",
+             wealth.index = FALSE)
+  
+myportfolio_data <- left_join(portfolio_returns_tq_rebalanced_monthly, 
+                              spy_returns_monthly, 
+                              by="date") %>% 
+                              na.omit() %>% 
+                    mutate(
+                      # cumsum() and cumprod() calcuale the running sum/product
+                      # here we use cumprod, as we calcualte return using type=arithmetic
+                      # if we had calculated return using log, we would need cumsum
+                        portfolio_growth =  1000 * cumprod(1 + monthly_return),
+                        sp500_growth = 	1000 * cumprod(1 + SPY_return)
+                    )
+})
+
+portfolio_model_augmented <- eventReactive(input$go, {
+  
+  myportfolio_data <- myportfolio_data()
+  
+  
+  portfolio_model_augmented <- 
+    myportfolio_data %>% 
+    lm(monthly_return ~ SPY_return, data = .) %>% 
+    augment() %>% 
+    mutate(date = myportfolio_data$date)
+  
+})
+  
+```
+
+
+
+Choose your 10 Stocks, allocate your weights, and choose a starting date to construct your portfolio 
+=====================================  
+
+Row {data-height=290}
+-----------------------------------------------------------------------
+
+### Portflio Performance by Monthly Returns
+
+
+```{r}
+#use plotly to create interactive chart, so when we place our cursor on ti, we can see values
+
+renderPlotly({
+  
+  fubar1 <- myportfolio_data() %>% 
+    ggplot(aes(x = date, y = monthly_return)) +
+    geom_bar(stat = "identity", fill = palette_light()[[1]]) +
+    labs(title = "Portfolio Returns",
+         caption = "Shows an above-zero trend meaning positive returns",
+         x = "", y = "Monthly Returns") +
+    theme_tq() +
+    scale_color_tq() +
+    scale_y_continuous(labels = scales::percent) 
+    
+  ggplotly(fubar1)
+})
+
+
+```
+
+
+Row 2 {data-height=115}
+----------------------------------
+
+### Portflio Performance Statistics
+
+```{r}
+renderTable({
+
+  myportfolio_data <- myportfolio_data()
+  
+    myportfolio_data %>% 
+   tq_performance(Ra = monthly_return, Rb = NULL, performance_fun = table.AnnualizedReturns)
+    
+})
+```
+
+
+
+
+Row 3 {data-height=290}
+-----------------------------------------------------------------------
+### Portfolio Growth Tracker (Initial Investment of $1000)
+
+```{r}
+#use highchart to get interactive scatter plot
+
+renderPlotly({
+  
+  fubar2 <- myportfolio_data() %>% 
+    ggplot(aes(x = date, y = portfolio_growth - sp500_growth)) +
+    geom_bar(stat = "identity", fill = palette_light()[[2]]) +
+    labs(title = "Portfolio Growth in Excess of the S&P500",
+         caption = "Shows the growth of the portflio in excess of the S&P500 for an investment of $1000",
+         x = "", y = "Dollar Returns (USD)") +
+    geom_smooth(method = "lm") +
+    theme_tq() +
+    scale_color_tq() +
+    scale_y_continuous(labels = scales::dollar) 
+    
+  ggplotly(fubar2)
+})
+
+```
+
+
+Row 4 {data-height=115}
+----------------------------------
+
+### Measures of Risk Management 
+
+```{r}
+renderTable({
+
+  myportfolio_data <- myportfolio_data()
+  
+    myportfolio_data %>% 
+   tq_performance(Ra = monthly_return, Rb = NULL, performance_fun = table.DownsideRisk)
+    
+})
+```
